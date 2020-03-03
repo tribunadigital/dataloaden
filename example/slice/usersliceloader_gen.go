@@ -9,6 +9,45 @@ import (
 	"github.com/tribunadigital/dataloaden/example"
 )
 
+// UserSliceLoaderCache can be used to cache results. A default map based
+// implementation is used by default.
+type UserSliceLoaderCache interface {
+	Get(key int) ([]example.User, bool)
+	Set(key int, value []example.User)
+	ClearKey(key int)
+}
+
+type UserSliceLoaderInMemCache struct {
+	data map[int][]example.User
+	mu   *sync.Mutex
+}
+
+func NewUserSliceLoaderInMemCache() *UserSliceLoaderInMemCache {
+	return &UserSliceLoaderInMemCache{
+		data: map[int][]example.User{},
+		mu:   &sync.Mutex{},
+	}
+}
+
+func (c *UserSliceLoaderInMemCache) Get(key int) ([]example.User, bool) {
+	c.mu.Lock()
+	r, ok := c.data[key]
+	c.mu.Unlock()
+	return r, ok
+}
+
+func (c *UserSliceLoaderInMemCache) Set(key int, value []example.User) {
+	c.mu.Lock()
+	c.data[key] = value
+	c.mu.Unlock()
+}
+
+func (c *UserSliceLoaderInMemCache) ClearKey(key int) {
+	c.mu.Lock()
+	delete(c.data, key)
+	c.mu.Unlock()
+}
+
 // UserSliceLoaderConfig captures the config to create a new UserSliceLoader
 type UserSliceLoaderConfig struct {
 	// Fetch is a method that provides the data for the loader
@@ -19,15 +58,25 @@ type UserSliceLoaderConfig struct {
 
 	// MaxBatch will limit the maximum number of keys to send in one batch, 0 = not limit
 	MaxBatch int
+
+	// Cache is the datastructure used to cache fetched data
+	Cache UserSliceLoaderCache
 }
 
 // NewUserSliceLoader creates a new UserSliceLoader given a fetch, wait, and maxBatch
 func NewUserSliceLoader(config UserSliceLoaderConfig) *UserSliceLoader {
-	return &UserSliceLoader{
+	dl := UserSliceLoader{
 		fetch:    config.Fetch,
 		wait:     config.Wait,
 		maxBatch: config.MaxBatch,
+		cache:    NewUserSliceLoaderInMemCache(),
 	}
+
+	if config.Cache != nil {
+		dl.cache = config.Cache
+	}
+
+	return &dl
 }
 
 // UserSliceLoader batches and caches requests
@@ -44,7 +93,7 @@ type UserSliceLoader struct {
 	// INTERNAL
 
 	// lazily created cache
-	cache map[int][]example.User
+	cache UserSliceLoaderCache
 
 	// the current batch. keys will continue to be collected until timeout is hit,
 	// then everything will be sent to the fetch method and out to the listeners
@@ -71,13 +120,12 @@ func (l *UserSliceLoader) Load(key int) ([]example.User, error) {
 // This method should be used if you want one goroutine to make requests to many
 // different data loaders without blocking until the thunk is called.
 func (l *UserSliceLoader) LoadThunk(key int) func() ([]example.User, error) {
-	l.mu.Lock()
-	if it, ok := l.cache[key]; ok {
-		l.mu.Unlock()
+	if it, ok := l.cache.Get(key); ok {
 		return func() ([]example.User, error) {
 			return it, nil
 		}
 	}
+	l.mu.Lock()
 	if l.batch == nil {
 		l.batch = &userSliceLoaderBatch{done: make(chan struct{})}
 	}
@@ -150,31 +198,27 @@ func (l *UserSliceLoader) LoadAllThunk(keys []int) func() ([][]example.User, []e
 // and false is returned.
 // (To forcefully prime the cache, clear the key first with loader.clear(key).prime(key, value).)
 func (l *UserSliceLoader) Prime(key int, value []example.User) bool {
-	l.mu.Lock()
 	var found bool
-	if _, found = l.cache[key]; !found {
+	if _, found = l.cache.Get(key); !found {
 		// make a copy when writing to the cache, its easy to pass a pointer in from a loop var
 		// and end up with the whole cache pointing to the same value.
 		cpy := make([]example.User, len(value))
 		copy(cpy, value)
 		l.unsafeSet(key, cpy)
 	}
-	l.mu.Unlock()
 	return !found
 }
 
 // Clear the value at key from the cache, if it exists
 func (l *UserSliceLoader) Clear(key int) {
-	l.mu.Lock()
-	delete(l.cache, key)
-	l.mu.Unlock()
+	l.cache.ClearKey(key)
 }
 
 func (l *UserSliceLoader) unsafeSet(key int, value []example.User) {
 	if l.cache == nil {
-		l.cache = map[int][]example.User{}
+		l.cache = NewUserSliceLoaderInMemCache()
 	}
-	l.cache[key] = value
+	l.cache.Set(key, value)
 }
 
 // keyIndex will return the location of the key in the batch, if its not found

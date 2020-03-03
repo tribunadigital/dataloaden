@@ -1,4 +1,4 @@
-package slice
+package slice_test
 
 import (
 	"fmt"
@@ -10,16 +10,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tribunadigital/dataloaden/example"
+	"github.com/tribunadigital/dataloaden/example/slice"
 )
 
 func TestUserLoader(t *testing.T) {
 	var fetches [][]int
 	var mu sync.Mutex
 
-	dl := &UserSliceLoader{
-		wait:     10 * time.Millisecond,
-		maxBatch: 5,
-		fetch: func(keys []int) (users [][]example.User, errors []error) {
+	dl := slice.NewUserSliceLoader(slice.UserSliceLoaderConfig{
+		Fetch: func(keys []int) (users [][]example.User, errors []error) {
 			mu.Lock()
 			fetches = append(fetches, keys)
 			mu.Unlock()
@@ -39,7 +38,9 @@ func TestUserLoader(t *testing.T) {
 			}
 			return users, errors
 		},
-	}
+		Wait:     10 * time.Millisecond,
+		MaxBatch: 5,
+	})
 
 	t.Run("fetch concurrent data", func(t *testing.T) {
 		t.Run("load user successfully", func(t *testing.T) {

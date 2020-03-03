@@ -19,6 +19,45 @@ import (
     {{if .ValType.ImportPath}}"{{.ValType.ImportPath}}"{{end}}
 )
 
+// {{.Name}}Cache can be used to cache results. A default map based
+// implementation is used by default.
+type {{.Name}}Cache interface {
+	Get(key {{.KeyType.String}}) ({{.ValType.String}}, bool)
+	Set(key {{.KeyType.String}}, value {{.ValType.String}})
+	ClearKey(key {{.KeyType.String}})
+}
+
+type {{.Name}}InMemCache struct {
+	data map[{{.KeyType.String}}]{{.ValType.String}}
+	mu   *sync.Mutex
+}
+
+func New{{.Name}}InMemCache() *{{.Name}}InMemCache {
+	return &{{.Name}}InMemCache{
+		data: map[{{.KeyType.String}}]{{.ValType.String}}{},
+		mu:   &sync.Mutex{},
+	}
+}
+
+func (c *{{.Name}}InMemCache) Get(key {{.KeyType.String}}) ({{.ValType.String}}, bool) {
+	c.mu.Lock()
+	r, ok:= c.data[key]
+	c.mu.Unlock()
+	return r, ok
+}
+
+func (c *{{.Name}}InMemCache) Set(key {{.KeyType.String}}, value {{.ValType.String}}) {
+	c.mu.Lock()
+	c.data[key] = value
+	c.mu.Unlock()
+}
+
+func (c *{{.Name}}InMemCache) ClearKey(key {{.KeyType.String}}) {
+	c.mu.Lock()
+	delete(c.data, key)
+	c.mu.Unlock()
+}
+
 // {{.Name}}Config captures the config to create a new {{.Name}}
 type {{.Name}}Config struct {
 	// Fetch is a method that provides the data for the loader 
@@ -29,15 +68,25 @@ type {{.Name}}Config struct {
 
 	// MaxBatch will limit the maximum number of keys to send in one batch, 0 = not limit
 	MaxBatch int
+
+	// Cache is the datastructure used to cache fetched data
+	Cache {{.Name}}Cache
 }
 
 // New{{.Name}} creates a new {{.Name}} given a fetch, wait, and maxBatch
 func New{{.Name}}(config {{.Name}}Config) *{{.Name}} {
-	return &{{.Name}}{
+	dl := {{.Name}}{
 		fetch: config.Fetch,
 		wait: config.Wait,
 		maxBatch: config.MaxBatch,
+		cache: New{{.Name}}InMemCache(),
 	}
+
+	if config.Cache != nil {
+		dl.cache = config.Cache
+	}
+
+	return &dl
 }
 
 // {{.Name}} batches and caches requests          
@@ -53,8 +102,7 @@ type {{.Name}} struct {
 
 	// INTERNAL
 
-	// lazily created cache
-	cache map[{{.KeyType.String}}]{{.ValType.String}}
+	cache {{.Name}}Cache
 
 	// the current batch. keys will continue to be collected until timeout is hit,
 	// then everything will be sent to the fetch method and out to the listeners
@@ -81,13 +129,12 @@ func (l *{{.Name}}) Load(key {{.KeyType.String}}) ({{.ValType.String}}, error) {
 // This method should be used if you want one goroutine to make requests to many
 // different data loaders without blocking until the thunk is called.
 func (l *{{.Name}}) LoadThunk(key {{.KeyType.String}}) func() ({{.ValType.String}}, error) {
-	l.mu.Lock()
-	if it, ok := l.cache[key]; ok {
-		l.mu.Unlock()
+	if it, ok := l.cache.Get(key); ok {
 		return func() ({{.ValType.String}}, error) {
 			return it, nil
 		}
 	}
+	l.mu.Lock()
 	if l.batch == nil {
 		l.batch = &{{.Name|lcFirst}}Batch{done: make(chan struct{})}
 	}
@@ -160,9 +207,8 @@ func (l *{{.Name}}) LoadAllThunk(keys []{{.KeyType}}) (func() ([]{{.ValType.Stri
 // and false is returned.
 // (To forcefully prime the cache, clear the key first with loader.clear(key).prime(key, value).)
 func (l *{{.Name}}) Prime(key {{.KeyType}}, value {{.ValType.String}}) bool {
-	l.mu.Lock()
 	var found bool
-	if _, found = l.cache[key]; !found {
+	if _, found = l.cache.Get(key); !found {
 		{{- if .ValType.IsPtr }}
 			// make a copy when writing to the cache, its easy to pass a pointer in from a loop var
 			// and end up with the whole cache pointing to the same value.
@@ -178,22 +224,19 @@ func (l *{{.Name}}) Prime(key {{.KeyType}}, value {{.ValType.String}}) bool {
 			l.unsafeSet(key, value)
 		{{- end }}
 	}
-	l.mu.Unlock()
 	return !found
 }
 
 // Clear the value at key from the cache, if it exists
 func (l *{{.Name}}) Clear(key {{.KeyType}}) {
-	l.mu.Lock()
-	delete(l.cache, key)
-	l.mu.Unlock()
+	l.cache.ClearKey(key)
 }
 
 func (l *{{.Name}}) unsafeSet(key {{.KeyType}}, value {{.ValType.String}}) {
 	if l.cache == nil {
-		l.cache = map[{{.KeyType}}]{{.ValType.String}}{}
+		l.cache = New{{.Name}}InMemCache()
 	}
-	l.cache[key] = value
+	l.cache.Set(key, value)
 }
 
 // keyIndex will return the location of the key in the batch, if its not found

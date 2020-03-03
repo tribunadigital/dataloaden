@@ -1,4 +1,4 @@
-package example
+package example_test
 
 import (
 	"fmt"
@@ -9,33 +9,34 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tribunadigital/dataloaden/example"
 )
 
 func TestUserLoader(t *testing.T) {
 	var fetches [][]string
 	var mu sync.Mutex
 
-	dl := &UserLoader{
-		wait:     10 * time.Millisecond,
-		maxBatch: 5,
-		fetch: func(keys []string) ([]*User, []error) {
+	dl := example.NewUserLoader(example.UserLoaderConfig{
+		Wait:     10 * time.Millisecond,
+		MaxBatch: 5,
+		Fetch: func(keys []string) ([]*example.User, []error) {
 			mu.Lock()
 			fetches = append(fetches, keys)
 			mu.Unlock()
 
-			users := make([]*User, len(keys))
+			users := make([]*example.User, len(keys))
 			errors := make([]error, len(keys))
 
 			for i, key := range keys {
 				if strings.HasPrefix(key, "E") {
 					errors[i] = fmt.Errorf("user not found")
 				} else {
-					users[i] = &User{ID: key, Name: "user " + key}
+					users[i] = &example.User{ID: key, Name: "user " + key}
 				}
 			}
 			return users, errors
 		},
-	}
+	})
 
 	t.Run("fetch concurrent data", func(t *testing.T) {
 		t.Run("load user successfully", func(t *testing.T) {
@@ -139,7 +140,7 @@ func TestUserLoader(t *testing.T) {
 	})
 
 	t.Run("primed reads dont hit the fetcher", func(t *testing.T) {
-		dl.Prime("U99", &User{ID: "U99", Name: "Primed user"})
+		dl.Prime("U99", &example.User{ID: "U99", Name: "Primed user"})
 		u, err := dl.Load("U99")
 		require.NoError(t, err)
 		require.Equal(t, "Primed user", u.Name)
@@ -148,7 +149,7 @@ func TestUserLoader(t *testing.T) {
 	})
 
 	t.Run("priming in a loop is safe", func(t *testing.T) {
-		users := []User{
+		users := []example.User{
 			{ID: "Alpha", Name: "Alpha"},
 			{ID: "Omega", Name: "Omega"},
 		}

@@ -27,32 +27,32 @@ type {{.Name}}Cache interface {
 	ClearKey(key {{.KeyType.String}})
 }
 
-type {{.Name}}InMemCache struct {
+type {{.Name}}MapCache struct {
 	data map[{{.KeyType.String}}]{{.ValType.String}}
 	mu   *sync.Mutex
 }
 
-func New{{.Name}}InMemCache() *{{.Name}}InMemCache {
-	return &{{.Name}}InMemCache{
+func New{{.Name}}MapCache() *{{.Name}}MapCache {
+	return &{{.Name}}MapCache{
 		data: map[{{.KeyType.String}}]{{.ValType.String}}{},
 		mu:   &sync.Mutex{},
 	}
 }
 
-func (c *{{.Name}}InMemCache) Get(key {{.KeyType.String}}) ({{.ValType.String}}, bool) {
+func (c *{{.Name}}MapCache) Get(key {{.KeyType.String}}) ({{.ValType.String}}, bool) {
 	c.mu.Lock()
 	r, ok:= c.data[key]
 	c.mu.Unlock()
 	return r, ok
 }
 
-func (c *{{.Name}}InMemCache) Set(key {{.KeyType.String}}, value {{.ValType.String}}) {
+func (c *{{.Name}}MapCache) Set(key {{.KeyType.String}}, value {{.ValType.String}}) {
 	c.mu.Lock()
 	c.data[key] = value
 	c.mu.Unlock()
 }
 
-func (c *{{.Name}}InMemCache) ClearKey(key {{.KeyType.String}}) {
+func (c *{{.Name}}MapCache) ClearKey(key {{.KeyType.String}}) {
 	c.mu.Lock()
 	delete(c.data, key)
 	c.mu.Unlock()
@@ -79,7 +79,7 @@ func New{{.Name}}(config {{.Name}}Config) *{{.Name}} {
 		fetch: config.Fetch,
 		wait: config.Wait,
 		maxBatch: config.MaxBatch,
-		cache: New{{.Name}}InMemCache(),
+		cache: New{{.Name}}MapCache(),
 	}
 
 	if config.Cache != nil {
@@ -234,7 +234,7 @@ func (l *{{.Name}}) Clear(key {{.KeyType}}) {
 
 func (l *{{.Name}}) unsafeSet(key {{.KeyType}}, value {{.ValType.String}}) {
 	if l.cache == nil {
-		l.cache = New{{.Name}}InMemCache()
+		l.cache = New{{.Name}}MapCache()
 	}
 	l.cache.Set(key, value)
 }

@@ -1,4 +1,4 @@
-//go:generate go run github.com/tribunadigital/dataloaden UserSliceLoader int []github.com/tribunadigital/dataloaden/example.User
+//go:generate ../../dataloaden UserSliceLoader int []github.com/tribunadigital/dataloaden/example.User
 
 package slice
 

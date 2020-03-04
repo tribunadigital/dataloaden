@@ -15,32 +15,32 @@ type UserLoaderCache interface {
 	ClearKey(key string)
 }
 
-type UserLoaderInMemCache struct {
+type UserLoaderMapCache struct {
 	data map[string]*User
 	mu   *sync.Mutex
 }
 
-func NewUserLoaderInMemCache() *UserLoaderInMemCache {
-	return &UserLoaderInMemCache{
+func NewUserLoaderMapCache() *UserLoaderMapCache {
+	return &UserLoaderMapCache{
 		data: map[string]*User{},
 		mu:   &sync.Mutex{},
 	}
 }
 
-func (c *UserLoaderInMemCache) Get(key string) (*User, bool) {
+func (c *UserLoaderMapCache) Get(key string) (*User, bool) {
 	c.mu.Lock()
 	r, ok := c.data[key]
 	c.mu.Unlock()
 	return r, ok
 }
 
-func (c *UserLoaderInMemCache) Set(key string, value *User) {
+func (c *UserLoaderMapCache) Set(key string, value *User) {
 	c.mu.Lock()
 	c.data[key] = value
 	c.mu.Unlock()
 }
 
-func (c *UserLoaderInMemCache) ClearKey(key string) {
+func (c *UserLoaderMapCache) ClearKey(key string) {
 	c.mu.Lock()
 	delete(c.data, key)
 	c.mu.Unlock()
@@ -67,7 +67,7 @@ func NewUserLoader(config UserLoaderConfig) *UserLoader {
 		fetch:    config.Fetch,
 		wait:     config.Wait,
 		maxBatch: config.MaxBatch,
-		cache:    NewUserLoaderInMemCache(),
+		cache:    NewUserLoaderMapCache(),
 	}
 
 	if config.Cache != nil {
@@ -90,7 +90,6 @@ type UserLoader struct {
 
 	// INTERNAL
 
-	// lazily created cache
 	cache UserLoaderCache
 
 	// the current batch. keys will continue to be collected until timeout is hit,
@@ -213,7 +212,7 @@ func (l *UserLoader) Clear(key string) {
 
 func (l *UserLoader) unsafeSet(key string, value *User) {
 	if l.cache == nil {
-		l.cache = NewUserLoaderInMemCache()
+		l.cache = NewUserLoaderMapCache()
 	}
 	l.cache.Set(key, value)
 }

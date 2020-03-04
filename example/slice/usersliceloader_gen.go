@@ -17,32 +17,32 @@ type UserSliceLoaderCache interface {
 	ClearKey(key int)
 }
 
-type UserSliceLoaderInMemCache struct {
+type UserSliceLoaderMapCache struct {
 	data map[int][]example.User
 	mu   *sync.Mutex
 }
 
-func NewUserSliceLoaderInMemCache() *UserSliceLoaderInMemCache {
-	return &UserSliceLoaderInMemCache{
+func NewUserSliceLoaderMapCache() *UserSliceLoaderMapCache {
+	return &UserSliceLoaderMapCache{
 		data: map[int][]example.User{},
 		mu:   &sync.Mutex{},
 	}
 }
 
-func (c *UserSliceLoaderInMemCache) Get(key int) ([]example.User, bool) {
+func (c *UserSliceLoaderMapCache) Get(key int) ([]example.User, bool) {
 	c.mu.Lock()
 	r, ok := c.data[key]
 	c.mu.Unlock()
 	return r, ok
 }
 
-func (c *UserSliceLoaderInMemCache) Set(key int, value []example.User) {
+func (c *UserSliceLoaderMapCache) Set(key int, value []example.User) {
 	c.mu.Lock()
 	c.data[key] = value
 	c.mu.Unlock()
 }
 
-func (c *UserSliceLoaderInMemCache) ClearKey(key int) {
+func (c *UserSliceLoaderMapCache) ClearKey(key int) {
 	c.mu.Lock()
 	delete(c.data, key)
 	c.mu.Unlock()
@@ -69,7 +69,7 @@ func NewUserSliceLoader(config UserSliceLoaderConfig) *UserSliceLoader {
 		fetch:    config.Fetch,
 		wait:     config.Wait,
 		maxBatch: config.MaxBatch,
-		cache:    NewUserSliceLoaderInMemCache(),
+		cache:    NewUserSliceLoaderMapCache(),
 	}
 
 	if config.Cache != nil {
@@ -92,7 +92,6 @@ type UserSliceLoader struct {
 
 	// INTERNAL
 
-	// lazily created cache
 	cache UserSliceLoaderCache
 
 	// the current batch. keys will continue to be collected until timeout is hit,
@@ -216,7 +215,7 @@ func (l *UserSliceLoader) Clear(key int) {
 
 func (l *UserSliceLoader) unsafeSet(key int, value []example.User) {
 	if l.cache == nil {
-		l.cache = NewUserSliceLoaderInMemCache()
+		l.cache = NewUserSliceLoaderMapCache()
 	}
 	l.cache.Set(key, value)
 }

@@ -16,7 +16,9 @@ import (
     "time"
 
     {{if .KeyType.ImportPath}}"{{.KeyType.ImportPath}}"{{end}}
-    {{if .ValType.ImportPath}}"{{.ValType.ImportPath}}"{{end}}
+	{{if .ValType.ImportPath}}"{{.ValType.ImportPath}}"{{end}}
+	
+	gocache "github.com/patrickmn/go-cache"
 )
 
 // {{.Name}}Cache can be used to cache results. A default map based
@@ -26,6 +28,46 @@ type {{.Name}}Cache interface {
 	Set(key {{.KeyType.String}}, value {{.ValType.String}})
 	ClearKey(key {{.KeyType.String}})
 }
+
+// Cache implementation for github.com/patrickmn/go-cache
+// !!! Works for string keys only !!!
+
+type {{.Name}}GoCache struct {
+	cache *gocache.Cache
+}
+
+type {{.Name}}GoCacheConfig struct {
+	DefaultExpiration time.Duration
+	CleanupInterval time.Duration
+}
+
+func New{{.Name}}GoCache(conf {{.Name}}GoCacheConfig) *{{.Name}}GoCache {
+	return &{{.Name}}GoCache{
+		cache: gocache.New(conf.DefaultExpiration, conf.CleanupInterval),
+	}
+}
+
+func (c *{{.Name}}GoCache) Get(key string) ({{.ValType.String}}, bool) {
+	var zero {{.ValType.String}}
+
+	i, exists := c.cache.Get(key)
+	if !exists {
+		return zero, false
+	}
+
+	v, ok := i.({{.ValType.String}})
+	return v, ok
+}
+
+func (c *{{.Name}}GoCache) Set(key string, value {{.ValType.String}}) {
+	c.cache.Set(key, value, 0)
+}
+
+func (c *{{.Name}}GoCache) ClearKey(key string) {
+	c.cache.Delete(key)
+}
+
+// Cache implementation for Golang Map
 
 type {{.Name}}MapCache struct {
 	data map[{{.KeyType.String}}]{{.ValType.String}}

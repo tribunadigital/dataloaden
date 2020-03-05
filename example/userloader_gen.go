@@ -5,6 +5,8 @@ package example
 import (
 	"sync"
 	"time"
+
+	gocache "github.com/patrickmn/go-cache"
 )
 
 // UserLoaderCache can be used to cache results. A default map based
@@ -14,6 +16,46 @@ type UserLoaderCache interface {
 	Set(key string, value *User)
 	ClearKey(key string)
 }
+
+// Cache implementation for github.com/patrickmn/go-cache
+// !!! Works for string keys only !!!
+
+type UserLoaderGoCache struct {
+	cache *gocache.Cache
+}
+
+type UserLoaderGoCacheConfig struct {
+	DefaultExpiration time.Duration
+	CleanupInterval   time.Duration
+}
+
+func NewUserLoaderGoCache(conf UserLoaderGoCacheConfig) *UserLoaderGoCache {
+	return &UserLoaderGoCache{
+		cache: gocache.New(conf.DefaultExpiration, conf.CleanupInterval),
+	}
+}
+
+func (c *UserLoaderGoCache) Get(key string) (*User, bool) {
+	var zero *User
+
+	i, exists := c.cache.Get(key)
+	if !exists {
+		return zero, false
+	}
+
+	v, ok := i.(*User)
+	return v, ok
+}
+
+func (c *UserLoaderGoCache) Set(key string, value *User) {
+	c.cache.Set(key, value, 0)
+}
+
+func (c *UserLoaderGoCache) ClearKey(key string) {
+	c.cache.Delete(key)
+}
+
+// Cache implementation for Golang Map
 
 type UserLoaderMapCache struct {
 	data map[string]*User

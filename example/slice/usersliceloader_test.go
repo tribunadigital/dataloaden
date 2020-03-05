@@ -1,8 +1,8 @@
-package slice
+package slice_test
 
 import (
 	"fmt"
-	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -10,16 +10,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tribunadigital/dataloaden/example"
+	"github.com/tribunadigital/dataloaden/example/slice"
 )
 
 func TestUserLoader(t *testing.T) {
-	var fetches [][]int
+	var fetches [][]string
 	var mu sync.Mutex
 
-	dl := &UserSliceLoader{
-		wait:     10 * time.Millisecond,
-		maxBatch: 5,
-		fetch: func(keys []int) (users [][]example.User, errors []error) {
+	dl := slice.NewUserSliceLoader(slice.UserSliceLoaderConfig{
+		Fetch: func(keys []string) (users [][]example.User, errors []error) {
 			mu.Lock()
 			fetches = append(fetches, keys)
 			mu.Unlock()
@@ -28,23 +27,26 @@ func TestUserLoader(t *testing.T) {
 			errors = make([]error, len(keys))
 
 			for i, key := range keys {
-				if key%10 == 0 { // anything ending in zero is bad
+				if strings.HasSuffix(key, "0") { // anything ending in zero is bad
 					errors[i] = fmt.Errorf("users not found")
 				} else {
 					users[i] = []example.User{
-						{ID: strconv.Itoa(key), Name: "user " + strconv.Itoa(key)},
-						{ID: strconv.Itoa(key), Name: "user " + strconv.Itoa(key)},
+						{ID: key, Name: "user " + key},
+						{ID: key, Name: "user " + key},
 					}
 				}
 			}
 			return users, errors
 		},
-	}
+		Wait:     10 * time.Millisecond,
+		MaxBatch: 5,
+		Cache:    slice.NewUserSliceLoaderGoCache(slice.UserSliceLoaderGoCacheConfig{}),
+	})
 
 	t.Run("fetch concurrent data", func(t *testing.T) {
 		t.Run("load user successfully", func(t *testing.T) {
 			t.Parallel()
-			u, err := dl.Load(1)
+			u, err := dl.Load("1")
 			require.NoError(t, err)
 			require.Equal(t, u[0].ID, "1")
 			require.Equal(t, u[1].ID, "1")
@@ -52,14 +54,14 @@ func TestUserLoader(t *testing.T) {
 
 		t.Run("load failed user", func(t *testing.T) {
 			t.Parallel()
-			u, err := dl.Load(10)
+			u, err := dl.Load("10")
 			require.Error(t, err)
 			require.Nil(t, u)
 		})
 
 		t.Run("load many users", func(t *testing.T) {
 			t.Parallel()
-			u, err := dl.LoadAll([]int{2, 10, 20, 4})
+			u, err := dl.LoadAll([]string{"2", "10", "20", "4"})
 			require.Equal(t, u[0][0].Name, "user 2")
 			require.Error(t, err[1])
 			require.Error(t, err[2])
@@ -68,8 +70,8 @@ func TestUserLoader(t *testing.T) {
 
 		t.Run("load thunk", func(t *testing.T) {
 			t.Parallel()
-			thunk1 := dl.LoadThunk(5)
-			thunk2 := dl.LoadThunk(50)
+			thunk1 := dl.LoadThunk("5")
+			thunk2 := dl.LoadThunk("50")
 
 			u1, err1 := thunk1()
 			require.NoError(t, err1)
@@ -94,14 +96,14 @@ func TestUserLoader(t *testing.T) {
 
 		t.Run("previously cached", func(t *testing.T) {
 			t.Parallel()
-			u, err := dl.Load(1)
+			u, err := dl.Load("1")
 			require.NoError(t, err)
 			require.Equal(t, u[0].ID, "1")
 		})
 
 		t.Run("load many users", func(t *testing.T) {
 			t.Parallel()
-			u, err := dl.LoadAll([]int{2, 4})
+			u, err := dl.LoadAll([]string{"2", "4"})
 			require.NoError(t, err[0])
 			require.NoError(t, err[1])
 			require.Equal(t, u[0][0].Name, "user 2")
@@ -119,14 +121,14 @@ func TestUserLoader(t *testing.T) {
 	t.Run("fetch partial", func(t *testing.T) {
 		t.Run("errors not in cache cache value", func(t *testing.T) {
 			t.Parallel()
-			u, err := dl.Load(20)
+			u, err := dl.Load("20")
 			require.Nil(t, u)
 			require.Error(t, err)
 		})
 
 		t.Run("load all", func(t *testing.T) {
 			t.Parallel()
-			u, err := dl.LoadAll([]int{1, 4, 10, 9, 5})
+			u, err := dl.LoadAll([]string{"1", "4", "10", "9", "5"})
 			require.Equal(t, u[0][0].ID, "1")
 			require.Equal(t, u[1][0].ID, "4")
 			require.Error(t, err[2])
@@ -144,11 +146,11 @@ func TestUserLoader(t *testing.T) {
 	})
 
 	t.Run("primed reads dont hit the fetcher", func(t *testing.T) {
-		dl.Prime(99, []example.User{
+		dl.Prime("99", []example.User{
 			{ID: "U99", Name: "Primed user"},
 			{ID: "U99", Name: "Primed user"},
 		})
-		u, err := dl.Load(99)
+		u, err := dl.Load("99")
 		require.NoError(t, err)
 		require.Equal(t, "Primed user", u[0].Name)
 
@@ -161,15 +163,15 @@ func TestUserLoader(t *testing.T) {
 			{{ID: "124", Name: "Omega"}, {ID: "124", Name: "Omega"}},
 		}
 		for _, user := range users {
-			id, _ := strconv.Atoi(user[0].ID)
+			id := user[0].ID
 			dl.Prime(id, user)
 		}
 
-		u, err := dl.Load(123)
+		u, err := dl.Load("123")
 		require.NoError(t, err)
 		require.Equal(t, "Alpha", u[0].Name)
 
-		u, err = dl.Load(124)
+		u, err = dl.Load("124")
 		require.NoError(t, err)
 		require.Equal(t, "Omega", u[0].Name)
 
@@ -177,8 +179,8 @@ func TestUserLoader(t *testing.T) {
 	})
 
 	t.Run("cleared results will go back to the fetcher", func(t *testing.T) {
-		dl.Clear(99)
-		u, err := dl.Load(99)
+		dl.Clear("99")
+		u, err := dl.Load("99")
 		require.NoError(t, err)
 		require.Equal(t, "user 99", u[0].Name)
 
@@ -186,8 +188,8 @@ func TestUserLoader(t *testing.T) {
 	})
 
 	t.Run("load all thunk", func(t *testing.T) {
-		thunk1 := dl.LoadAllThunk([]int{5, 6})
-		thunk2 := dl.LoadAllThunk([]int{6, 60})
+		thunk1 := dl.LoadAllThunk([]string{"5", "6"})
+		thunk2 := dl.LoadAllThunk([]string{"6", "60"})
 
 		users1, err1 := thunk1()
 

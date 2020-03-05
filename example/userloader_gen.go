@@ -5,7 +5,88 @@ package example
 import (
 	"sync"
 	"time"
+
+	gocache "github.com/patrickmn/go-cache"
 )
+
+// UserLoaderCache can be used to cache results. A default map based
+// implementation is used by default.
+type UserLoaderCache interface {
+	Get(key string) (*User, bool)
+	Set(key string, value *User)
+	ClearKey(key string)
+}
+
+// Cache implementation for github.com/patrickmn/go-cache
+// !!! Works for string keys only !!!
+
+type UserLoaderGoCache struct {
+	cache *gocache.Cache
+}
+
+type UserLoaderGoCacheConfig struct {
+	DefaultExpiration time.Duration
+	CleanupInterval   time.Duration
+}
+
+func NewUserLoaderGoCache(conf UserLoaderGoCacheConfig) *UserLoaderGoCache {
+	return &UserLoaderGoCache{
+		cache: gocache.New(conf.DefaultExpiration, conf.CleanupInterval),
+	}
+}
+
+func (c *UserLoaderGoCache) Get(key string) (*User, bool) {
+	var zero *User
+
+	i, exists := c.cache.Get(key)
+	if !exists {
+		return zero, false
+	}
+
+	v, ok := i.(*User)
+	return v, ok
+}
+
+func (c *UserLoaderGoCache) Set(key string, value *User) {
+	c.cache.Set(key, value, 0)
+}
+
+func (c *UserLoaderGoCache) ClearKey(key string) {
+	c.cache.Delete(key)
+}
+
+// Cache implementation for Golang Map
+
+type UserLoaderMapCache struct {
+	data map[string]*User
+	mu   *sync.Mutex
+}
+
+func NewUserLoaderMapCache() *UserLoaderMapCache {
+	return &UserLoaderMapCache{
+		data: map[string]*User{},
+		mu:   &sync.Mutex{},
+	}
+}
+
+func (c *UserLoaderMapCache) Get(key string) (*User, bool) {
+	c.mu.Lock()
+	r, ok := c.data[key]
+	c.mu.Unlock()
+	return r, ok
+}
+
+func (c *UserLoaderMapCache) Set(key string, value *User) {
+	c.mu.Lock()
+	c.data[key] = value
+	c.mu.Unlock()
+}
+
+func (c *UserLoaderMapCache) ClearKey(key string) {
+	c.mu.Lock()
+	delete(c.data, key)
+	c.mu.Unlock()
+}
 
 // UserLoaderConfig captures the config to create a new UserLoader
 type UserLoaderConfig struct {
@@ -17,15 +98,25 @@ type UserLoaderConfig struct {
 
 	// MaxBatch will limit the maximum number of keys to send in one batch, 0 = not limit
 	MaxBatch int
+
+	// Cache is the datastructure used to cache fetched data
+	Cache UserLoaderCache
 }
 
 // NewUserLoader creates a new UserLoader given a fetch, wait, and maxBatch
 func NewUserLoader(config UserLoaderConfig) *UserLoader {
-	return &UserLoader{
+	dl := UserLoader{
 		fetch:    config.Fetch,
 		wait:     config.Wait,
 		maxBatch: config.MaxBatch,
+		cache:    NewUserLoaderMapCache(),
 	}
+
+	if config.Cache != nil {
+		dl.cache = config.Cache
+	}
+
+	return &dl
 }
 
 // UserLoader batches and caches requests
@@ -41,8 +132,7 @@ type UserLoader struct {
 
 	// INTERNAL
 
-	// lazily created cache
-	cache map[string]*User
+	cache UserLoaderCache
 
 	// the current batch. keys will continue to be collected until timeout is hit,
 	// then everything will be sent to the fetch method and out to the listeners
@@ -69,13 +159,12 @@ func (l *UserLoader) Load(key string) (*User, error) {
 // This method should be used if you want one goroutine to make requests to many
 // different data loaders without blocking until the thunk is called.
 func (l *UserLoader) LoadThunk(key string) func() (*User, error) {
-	l.mu.Lock()
-	if it, ok := l.cache[key]; ok {
-		l.mu.Unlock()
+	if it, ok := l.cache.Get(key); ok {
 		return func() (*User, error) {
 			return it, nil
 		}
 	}
+	l.mu.Lock()
 	if l.batch == nil {
 		l.batch = &userLoaderBatch{done: make(chan struct{})}
 	}
@@ -148,30 +237,26 @@ func (l *UserLoader) LoadAllThunk(keys []string) func() ([]*User, []error) {
 // and false is returned.
 // (To forcefully prime the cache, clear the key first with loader.clear(key).prime(key, value).)
 func (l *UserLoader) Prime(key string, value *User) bool {
-	l.mu.Lock()
 	var found bool
-	if _, found = l.cache[key]; !found {
+	if _, found = l.cache.Get(key); !found {
 		// make a copy when writing to the cache, its easy to pass a pointer in from a loop var
 		// and end up with the whole cache pointing to the same value.
 		cpy := *value
 		l.unsafeSet(key, &cpy)
 	}
-	l.mu.Unlock()
 	return !found
 }
 
 // Clear the value at key from the cache, if it exists
 func (l *UserLoader) Clear(key string) {
-	l.mu.Lock()
-	delete(l.cache, key)
-	l.mu.Unlock()
+	l.cache.ClearKey(key)
 }
 
 func (l *UserLoader) unsafeSet(key string, value *User) {
 	if l.cache == nil {
-		l.cache = map[string]*User{}
+		l.cache = NewUserLoaderMapCache()
 	}
-	l.cache[key] = value
+	l.cache.Set(key, value)
 }
 
 // keyIndex will return the location of the key in the batch, if its not found

@@ -3,6 +3,7 @@
 package slice
 
 import (
+	"context"
 	"time"
 
 	"github.com/tribunadigital/dataloaden/example"
@@ -12,7 +13,7 @@ func NewLoader() *UserSliceLoader {
 	return &UserSliceLoader{
 		wait:     2 * time.Millisecond,
 		maxBatch: 100,
-		fetch: func(keys []string) ([][]example.User, []error) {
+		fetch: func(contexts []context.Context, keys []string) ([][]example.User, []error) {
 			users := make([][]example.User, len(keys))
 			errors := make([]error, len(keys))
 

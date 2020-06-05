@@ -3,6 +3,7 @@
 package slice
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -93,7 +94,7 @@ func (c *UserSliceLoaderMapCache) ClearKey(key string) {
 // UserSliceLoaderConfig captures the config to create a new UserSliceLoader
 type UserSliceLoaderConfig struct {
 	// Fetch is a method that provides the data for the loader
-	Fetch func(keys []string) ([][]example.User, []error)
+	Fetch func(contexts []context.Context, keys []string) ([][]example.User, []error)
 
 	// Wait is how long wait before sending a batch
 	Wait time.Duration
@@ -124,7 +125,7 @@ func NewUserSliceLoader(config UserSliceLoaderConfig) *UserSliceLoader {
 // UserSliceLoader batches and caches requests
 type UserSliceLoader struct {
 	// this method provides the data for the loader
-	fetch func(keys []string) ([][]example.User, []error)
+	fetch func(contexts []context.Context, keys []string) ([][]example.User, []error)
 
 	// how long to done before sending a batch
 	wait time.Duration
@@ -145,22 +146,23 @@ type UserSliceLoader struct {
 }
 
 type userSliceLoaderBatch struct {
-	keys    []string
-	data    [][]example.User
-	error   []error
-	closing bool
-	done    chan struct{}
+	keys     []string
+	data     [][]example.User
+	contexts []context.Context
+	error    []error
+	closing  bool
+	done     chan struct{}
 }
 
 // Load a User by key, batching and caching will be applied automatically
-func (l *UserSliceLoader) Load(key string) ([]example.User, error) {
-	return l.LoadThunk(key)()
+func (l *UserSliceLoader) Load(ctx context.Context, key string) ([]example.User, error) {
+	return l.LoadThunk(ctx, key)()
 }
 
 // LoadThunk returns a function that when called will block waiting for a User.
 // This method should be used if you want one goroutine to make requests to many
 // different data loaders without blocking until the thunk is called.
-func (l *UserSliceLoader) LoadThunk(key string) func() ([]example.User, error) {
+func (l *UserSliceLoader) LoadThunk(ctx context.Context, key string) func() ([]example.User, error) {
 	if it, ok := l.cache.Get(key); ok {
 		return func() ([]example.User, error) {
 			return it, nil
@@ -171,7 +173,7 @@ func (l *UserSliceLoader) LoadThunk(key string) func() ([]example.User, error) {
 		l.batch = &userSliceLoaderBatch{done: make(chan struct{})}
 	}
 	batch := l.batch
-	pos := batch.keyIndex(l, key)
+	pos := batch.keyIndex(ctx, l, key)
 	l.mu.Unlock()
 
 	return func() ([]example.User, error) {
@@ -202,11 +204,11 @@ func (l *UserSliceLoader) LoadThunk(key string) func() ([]example.User, error) {
 
 // LoadAll fetches many keys at once. It will be broken into appropriate sized
 // sub batches depending on how the loader is configured
-func (l *UserSliceLoader) LoadAll(keys []string) ([][]example.User, []error) {
+func (l *UserSliceLoader) LoadAll(ctx context.Context, keys []string) ([][]example.User, []error) {
 	results := make([]func() ([]example.User, error), len(keys))
 
 	for i, key := range keys {
-		results[i] = l.LoadThunk(key)
+		results[i] = l.LoadThunk(ctx, key)
 	}
 
 	users := make([][]example.User, len(keys))
@@ -220,10 +222,10 @@ func (l *UserSliceLoader) LoadAll(keys []string) ([][]example.User, []error) {
 // LoadAllThunk returns a function that when called will block waiting for a Users.
 // This method should be used if you want one goroutine to make requests to many
 // different data loaders without blocking until the thunk is called.
-func (l *UserSliceLoader) LoadAllThunk(keys []string) func() ([][]example.User, []error) {
+func (l *UserSliceLoader) LoadAllThunk(ctx context.Context, keys []string) func() ([][]example.User, []error) {
 	results := make([]func() ([]example.User, error), len(keys))
 	for i, key := range keys {
-		results[i] = l.LoadThunk(key)
+		results[i] = l.LoadThunk(ctx, key)
 	}
 	return func() ([][]example.User, []error) {
 		users := make([][]example.User, len(keys))
@@ -264,7 +266,7 @@ func (l *UserSliceLoader) unsafeSet(key string, value []example.User) {
 
 // keyIndex will return the location of the key in the batch, if its not found
 // it will add the key to the batch
-func (b *userSliceLoaderBatch) keyIndex(l *UserSliceLoader, key string) int {
+func (b *userSliceLoaderBatch) keyIndex(ctx context.Context, l *UserSliceLoader, key string) int {
 	for i, existingKey := range b.keys {
 		if key == existingKey {
 			return i
@@ -273,22 +275,23 @@ func (b *userSliceLoaderBatch) keyIndex(l *UserSliceLoader, key string) int {
 
 	pos := len(b.keys)
 	b.keys = append(b.keys, key)
+	b.contexts = append(b.contexts, ctx)
 	if pos == 0 {
-		go b.startTimer(l)
+		go b.startTimer(ctx, l)
 	}
 
 	if l.maxBatch != 0 && pos >= l.maxBatch-1 {
 		if !b.closing {
 			b.closing = true
 			l.batch = nil
-			go b.end(l)
+			go b.end(ctx, l)
 		}
 	}
 
 	return pos
 }
 
-func (b *userSliceLoaderBatch) startTimer(l *UserSliceLoader) {
+func (b *userSliceLoaderBatch) startTimer(ctx context.Context, l *UserSliceLoader) {
 	time.Sleep(l.wait)
 	l.mu.Lock()
 
@@ -301,10 +304,10 @@ func (b *userSliceLoaderBatch) startTimer(l *UserSliceLoader) {
 	l.batch = nil
 	l.mu.Unlock()
 
-	b.end(l)
+	b.end(ctx, l)
 }
 
-func (b *userSliceLoaderBatch) end(l *UserSliceLoader) {
-	b.data, b.error = l.fetch(b.keys)
+func (b *userSliceLoaderBatch) end(ctx context.Context, l *UserSliceLoader) {
+	b.data, b.error = l.fetch(b.contexts, b.keys)
 	close(b.done)
 }

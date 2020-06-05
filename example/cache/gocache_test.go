@@ -1,6 +1,7 @@
 package cache_test
 
 import (
+	"context"
 	"strconv"
 	"testing"
 	"time"
@@ -21,7 +22,7 @@ func TestGoCache(t *testing.T) {
 	c := 0
 	dl := cache.NewUserLoader(cache.UserLoaderConfig{
 		Wait: 10 * time.Microsecond,
-		Fetch: func(keys []string) ([]*example.User, []error) {
+		Fetch: func(contexts []context.Context, keys []string) ([]*example.User, []error) {
 			users := make([]*example.User, len(keys))
 			errors := make([]error, len(keys))
 
@@ -41,24 +42,24 @@ func TestGoCache(t *testing.T) {
 
 	t.Run("Cache", func(t *testing.T) {
 		// Load `U` and cache it
-		u, err := dl.Load("U")
+		u, err := dl.Load(context.Background(), "U")
 		require.NoError(t, err)
 
 		atcache := u.Name
 
 		// each Load incr `c`
-		dl.Load("U")
-		dl.Load("U")
-		dl.Load("U")
+		dl.Load(context.Background(), "U")
+		dl.Load(context.Background(), "U")
+		dl.Load(context.Background(), "U")
 
-		u, err = dl.Load("U")
+		u, err = dl.Load(context.Background(), "U")
 		require.NoError(t, err)
 		assert.Equal(t, atcache, u.Name)
 
 		atcache = u.Name
 		time.Sleep(cacheConf.DefaultExpiration)
 
-		u, err = dl.Load("U")
+		u, err = dl.Load(context.Background(), "U")
 		require.NoError(t, err)
 		assert.NotEqual(t, atcache, u.Name)
 		assert.Equal(t, u.Name, strconv.Itoa(c))
